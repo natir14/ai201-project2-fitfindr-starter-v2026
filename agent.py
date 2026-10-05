@@ -107,8 +107,84 @@ def run_agent(query: str, wardrobe: dict) -> dict:
     """
     session = new_session(query, wardrobe)
 
-    # TODO: delete these two lines and build the loop.
-    session["error"] = "The planning loop isn't built yet — see the TODO in agent.py."
+    # Parse the query with string splitting:
+    #   "size M"                      → size
+    #   "$30", "under 30", "below 30" → max_price
+    #   everything else, minus filler → description
+    filler = {
+        "looking", "for", "a", "an", "the", "i", "i'm", "im", "want", "need",
+        "some", "something", "find", "me", "in", "under", "below", "size",
+    }
+    description_words = []
+    size = None
+    max_price = None
+
+    words = [w.strip(",.!?") for w in query.split()]
+    for i, word in enumerate(words):
+        lower = word.lower()
+        previous = words[i - 1].lower() if i > 0 else ""
+
+        if previous == "size":
+            size = word
+            continue
+
+        if lower.startswith("$") or previous in ("under", "below"):
+            try:
+                max_price = float(lower.lstrip("$").replace(",", ""))
+                continue
+            except ValueError:
+                pass
+
+        if lower not in filler:
+            description_words.append(lower)
+
+    session["parsed"] = {
+        "description": " ".join(description_words),
+        "size": size,
+        "max_price": max_price,
+    }
+
+    # Each pass picks the next step from what's already in the session.
+    count = 0
+    while session["fit_card"] is None:
+        count += 1
+        trace.check_iterations(count)
+
+        if session["selected_item"] is None:
+            parsed = session["parsed"]
+            results = search_listings(
+                parsed["description"],
+                size=parsed["size"],
+                max_price=parsed["max_price"],
+            )
+            session["search_results"] = results
+
+            # The branch: nothing to style, so stop before suggest_outfit.
+            if not results:
+                tried = f"'{parsed['description']}'" if parsed["description"] else "your search"
+                if parsed["size"]:
+                    tried += f" in size {parsed['size']}"
+                if parsed["max_price"] is not None:
+                    tried += f" under ${parsed['max_price']:.2f}"
+                session["error"] = (
+                    f"Nothing matched {tried}. Try raising your max price, "
+                    "dropping the size, or using broader keywords "
+                    "(e.g. 'dress' instead of 'designer ballgown')."
+                )
+                return session
+
+            session["selected_item"] = results[0]
+
+        elif session["outfit_suggestion"] is None:
+            session["outfit_suggestion"] = suggest_outfit(
+                session["selected_item"], session["wardrobe"]
+            )
+
+        else:
+            session["fit_card"] = create_fit_card(
+                session["outfit_suggestion"], session["selected_item"]
+            )
+
     return session
 
 
