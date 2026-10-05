@@ -25,9 +25,13 @@ Given a query that matches at least one listing, the agent completes all three
 tool calls and returns a fit card — in at least 4 of 5 tries.
 
 **Why this target:**
-<!-- Why 4 of 5 and not 5 of 5? Something about your search, probably —
-     "my search is a plain keyword match and some phrasings will miss" is a
-     real answer. -->
+The search half of this path is deterministic — the string-split parser and
+`search_listings` give the same result for the same query every time — but
+`suggest_outfit` and `create_fit_card` both call the model through
+`generate()`, and `run_agent` doesn't catch model errors yet. If the service
+rate-limits past `MAX_RETRIES`, `generate()` raises and the run ends with no fit
+card. One miss in five leaves room for that; more than one means something in
+my code is wrong, not the service.
 
 ---
 
@@ -37,66 +41,62 @@ Given a query that matches no listings, the agent stops before calling
 `suggest_outfit` and returns a message naming what to change — 5 of 5 tries.
 
 **Why this target:**
-<!-- Why is 5 of 5 reasonable here when criterion 1 isn't? What's different
-     about this path? -->
+Nothing on this path calls the model. Parsing is string splitting,
+`search_listings` is plain filtering and keyword counting, and the branch is
+`if not results:` in `run_agent`, so the same query takes the same path every
+time. The error message is built from `session["parsed"]`, not generated, so
+it always names the description, size and price that were tried. Anything less
+than 5 of 5 would mean the branch itself is broken.
 
 ---
 
-## 3. Something about state
+## 3. The item search found is the item the fit card is about
 
-<!-- YOU WRITE THIS ONE.
-
-     How would you know that the item your search found is the same item the
-     next tool received? Name something countable or observable.
-
-     This is the criterion people find hardest, because state failure doesn't
-     look like state failure — it looks like a tool problem. Something that
-     compares session["selected_item"] against what actually reached
-     suggest_outfit is the shape you're after. -->
-
-
+For a matching query, `session["selected_item"]["id"]` equals
+`session["search_results"][0]["id"]`, and the fit card states the selected
+item's price (e.g. `$18` or `$18.00` for the Y2K Baby Tee) — in 5 of 5 tries.
 
 **Why this target:**
-
-
+The price only reaches `create_fit_card` through `session["selected_item"]` —
+the outfit text from `suggest_outfit` doesn't include it — so a correct price in
+the caption shows the item travelled search → session → third tool intact. If
+the wrong item were passed along, the price would be wrong or missing. The
+first half is pure code and should never fail; the second half depends on the
+model following the prompt's "mention the price" rule, but the price is in the
+prompt word for word, so I'm holding it to 5 of 5.
 
 ---
 
-## 4. Something about the fit card
+## 4. The fit card reads like a post from the buyer
 
-<!-- YOU WRITE THIS ONE.
-
-     The fit card calls a model, so the same input can produce different words
-     each time. That's not a bug — it's the nature of the tool. So what would
-     make it acceptable?
-
-     Think about what you'd actually be unhappy to see. A caption that never
-     mentions the price? Two different items producing the same opening
-     sentence? A card longer than a caption anyone would post? Any of those can
-     be turned into a number. -->
-
-
+Running the same matching query 5 times with the cache off
+(`AI201_CACHE=0`), the fit card is two to four sentences long and does not
+describe the item as being sold by the poster (no "listed", "selling",
+"for sale" or "DM me") — in at least 4 of 5 tries.
 
 **Why this target:**
-
-
+Both rules are instructions in the `create_fit_card` prompt, not checks in
+code, and `TEMPERATURE` is 0.9, so the wording changes every run and the model
+can drift. The prompt says "a real person posting their find" but never says
+the poster bought it, so the model has room to read it as a resale listing.
+4 of 5 allows for one drift; a caption that reads like an ad more often than
+that isn't doing its job.
 
 ---
 
-## 5. Your choice
+## 5. Search respects the size and price the user asked for
 
-<!-- YOU WRITE THIS ONE TOO.
-
-     Pick something you actually care about getting right. Speed, the empty
-     wardrobe path, what happens when the model can't be reached, whether the
-     search respects a price ceiling — anything, as long as it names a number
-     or an observable outcome. -->
-
-
+For the query `"top size S under $20"`, every listing in
+`session["search_results"]` has a price of $20.00 or less and has `S` as a
+whole size token (e.g. `S` or `S/M`, never `US 9` or `XS`) — 5 of 5 tries.
 
 **Why this target:**
-
-
+Both filters are plain comparisons in `search_listings`: `price > max_price`
+and a whole-token check on the size split on non-alphanumeric characters. No
+model is involved, so the same query gives the same results every time. The
+size check exists because a substring test lets `"s"` match `"us 9"` and return
+shoes for a small top. One wrong item in the results means the filter is
+broken, so 5 of 5.
 
 ---
 
