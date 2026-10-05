@@ -59,24 +59,24 @@
 
 ### `search_listings`
 
-- **What it does:**
-- **Inputs:** <!-- name and type each: `max_price` (float), not "a price" -->
-- **Returns:**
-- **When it has nothing:**
+- **What it does:** Loads every listing, drops the ones over `max_price` or not in `size`, scores the rest by how many words of `description` (lowercased, split on spaces) appear in the listing's title + description + style tags, and returns them best score first. Size matching is whole-token and case-insensitive: the listing's size is split on anything that isn't a letter, digit or `.`, so `"M"` matches `"S/M"` and `"M/L"`, but `"S"` does not match `"US 9"` and `"L"` does not match `"XL"`. `"One Size"` only matches a request for `"one"` or `"size"`, not `"M"`.
+- **Inputs:** `description` (str), `size` (str or None — None skips the size filter), `max_price` (float or None — inclusive; None skips the price filter)
+- **Returns:** a `list[dict]` of at most `config.SEARCH_RESULT_LIMIT` (10) listing dicts, highest keyword score first. Each dict has `id`, `title`, `description`, `category`, `style_tags` (list), `size`, `condition`, `price` (float), `colors` (list), `brand` (str or None), `platform`.
+- **When it has nothing:** returns `[]` — an empty list, not None and not an exception. This is what `run_agent` branches on.
 
 ### `suggest_outfit`
 
-- **What it does:**
-- **Inputs:**
-- **Returns:**
-- **When it has nothing:**
+- **What it does:** Builds a prompt from the new item (title, category, colors, style tags, description) and the user's wardrobe, and asks the model through `generate()` for one or two outfits that pair the item with pieces the user already owns, named exactly as listed.
+- **Inputs:** `new_item` (dict — a listing dict), `wardrobe` (dict with an `"items"` key holding a list of wardrobe item dicts: `name`, `category`, `colors`, and optional `notes`)
+- **Returns:** a non-empty `str` — the model's outfit suggestions, naming specific wardrobe pieces.
+- **When it has nothing:** if `wardrobe["items"]` is empty or missing, it asks the model for general styling ideas for the item instead and returns that string. If the model sends back a blank response, it returns `"No outfit suggestions came back for <title>. Try again."` It never returns `""`. Model errors from `generate()` are not caught here.
 
 ### `create_fit_card`
 
-- **What it does:**
-- **Inputs:**
-- **Returns:**
-- **When it has nothing:**
+- **What it does:** Asks the model through `generate()` for a social-media caption about the find, built from the item's title, price, platform, condition, colors, style tags and the outfit text. The prompt asks for 2–4 sentences, plain text with no hashtag list, the item, price and platform mentioned once each, and a specific vibe.
+- **Inputs:** `outfit` (str — the output of `suggest_outfit`), `new_item` (dict — a listing dict)
+- **Returns:** a `str` caption, two to four sentences. The length and the "once each" rules are requested in the prompt, not checked in code.
+- **When it has nothing:** if `outfit` is empty or whitespace-only, it returns `"Can't write a fit card for <title> yet — there's no outfit suggestion to build the caption from."` without calling the model. If the model sends back a blank response, it returns `"No caption came back for <title>. Try again."`
 
 ---
 
@@ -93,13 +93,13 @@
      The grader checks your code against what you claim here, so the file and
      function have to be real. -->
 
-**Branch rule:**
+**Branch rule:** If `search_listings` returns an empty list, put a message in `session["error"]` that repeats what was searched for (description, size, max price) and tells the user what to change — raise the max price, drop the size, or use broader keywords — then return the session without calling `suggest_outfit` or `create_fit_card`. Otherwise take the first result as `session["selected_item"]` and go to `suggest_outfit`, then `create_fit_card`.
 
 **Where it lives:** `agent.py::run_agent`
 
-**How the query is parsed:** <!-- regex, string splitting, or asking the model — say which -->
+**How the query is parsed:** String splitting, no regex and no model call. The query is split on spaces and trailing `,.!?` are stripped. The word after `size` becomes `size`. A word starting with `$`, or a number right after `under`/`below`, becomes `max_price`. Every other word, lowercased and minus a fixed list of filler words (`looking`, `for`, `a`, `the`, `want`, …), is joined back together as `description`. Example: `"vintage graphic tee under $30, size M"` → `{"description": "vintage graphic tee", "size": "M", "max_price": 30.0}`.
 
-**What moves through the session:** <!-- which fields, in what order -->
+**What moves through the session:** `query` → `parsed` (description, size, max_price) → `search_results` (the full list from `search_listings`) → `selected_item` (`search_results[0]`) → `outfit_suggestion` (from `suggest_outfit`, using `selected_item` and `wardrobe`) → `fit_card` (from `create_fit_card`, using `outfit_suggestion` and `selected_item`). If the search comes back empty, `error` is set and `selected_item`, `outfit_suggestion` and `fit_card` stay `None`. The loop is a `while` that picks its next step from which of these fields is still empty, and calls `trace.check_iterations(count)` on every pass.
 
 ---
 
@@ -113,25 +113,69 @@
 **One full query**
 
 ```
-$ python app.py ask '...'
+$ python app.py ask 'vintage graphic tee under $30, size M'
 
+  Found:    Y2K Baby Tee — Butterfly Print — $18.0 on depop
+
+  Outfit:   Here are two outfit ideas pairing the Y2K Butterfly Baby Tee with pieces already in your wardrobe:
+
+### Outfit 1: Casual Y2K Streetwear
+*Pair the baby tee with your baggy dark-wash jeans for a classic early-2000s contrast of fitted top and loose bottoms.*
+
+* **Top:** Y2K Baby Tee — Butterfly Print
+* **Bottoms:** Baggy straight-leg jeans, dark wash
+* **Outerwear:** Black cropped zip hoodie (worn open)
+* **Shoes:** Chunky white sneakers
+* **Accessories:** Black crossbody bag
+
+### Outfit 2: Elevated Casual / Cottagecore-meets-Street
+*Pair the butterfly graphic and pink/purple tones with your khaki trousers for a softer, earth-toned look.*
+
+* **Top:** Y2K Baby Tee — Butterfly Print
+* **Bottoms:** Wide-leg khaki trousers
+* **Accessories:** Brown leather belt
+* **Outerwear:** Vintage black denim jacket
+* **Shoes:** Black combat boots
+
+  Fit card: I am so obsessed with this butterfly print Y2K baby tee that I just listed on Depop for $18. It comes in excellent condition with the cutest pink and purple details, and it fits like a dream. You can style it with baggy dark-wash jeans and a zip hoodie for that ultimate early-2000s streetwear vibe, or dress it down with wide-leg khakis and combat boots for an effortless cottagecore-meets-street look.
+
+0 model calls this session, 2 served from cache
 ```
 
 **The three tools, tested one at a time**
 
 ```
 $ python -c "from tools import search_listings; print(search_listings('graphic tee', max_price=30))"
-
+[{'id': 'lst_002', 'title': 'Y2K Baby Tee — Butterfly Print', 'description': 'Super cute early 2000s baby tee with butterfly graphic. Fitted crop length. Tag says medium but fits like a small.', 'category': 'tops', 'style_tags': ['y2k', 'vintage', 'graphic tee', 'cottagecore'], 'size': 'S/M', 'condition': 'excellent', 'price': 18.0, 'colors': ['white', 'pink', 'purple'], 'brand': None, 'platform': 'depop'}, {'id': 'lst_006', 'title': 'Graphic Tee — 2003 Tour Bootleg Style', 'description': 'Vintage-style bootleg tee with faded graphic. Slightly boxy fit. 100% cotton, soft and worn-in.', 'category': 'tops', 'style_tags': ['graphic tee', 'vintage', 'grunge', 'streetwear', 'band tee'], 'size': 'L', 'condition': 'good', 'price': 24.0, 'colors': ['black'], 'brand': None, 'platform': 'depop'}, {'id': 'lst_017', 'title': 'Mesh Long-Sleeve Top — Black', 'description': 'Sheer black mesh long-sleeve. Great for layering under a graphic tee or over a bralette. Stretchy material, fits true to size.', 'category': 'tops', 'style_tags': ['y2k', 'grunge', 'goth', 'layering'], 'size': 'S/M', 'condition': 'excellent', 'price': 15.0, 'colors': ['black'], 'brand': None, 'platform': 'depop'}, {'id': 'lst_033', 'title': 'Vintage Band Tee — Faded Grey', 'description': 'Faded grey band-style tee with distressed graphic. Crew neck. Fits boxy. Well-loved but no holes or major damage.', 'category': 'tops', 'style_tags': ['vintage', 'grunge', 'band tee', 'graphic tee', 'streetwear'], 'size': 'L', 'condition': 'fair', 'price': 19.0, 'colors': ['grey', 'charcoal'], 'brand': None, 'platform': 'depop'}, {'id': 'lst_011', 'title': 'Low-Rise Cargo Pants — Khaki', 'description': 'Y2K era low-rise cargo pants. Lots of pockets. Khaki color, slightly distressed at the hems. Great for layering with a long tee.', 'category': 'bottoms', 'style_tags': ['y2k', 'cargo', '2000s', 'streetwear'], 'size': 'W29', 'condition': 'fair', 'price': 27.0, 'colors': ['khaki', 'tan'], 'brand': None, 'platform': 'poshmark'}, {'id': 'lst_012', 'title': 'Oversized Crewneck Sweatshirt — Vintage Navy', 'description': 'Perfectly faded navy crewneck. Genuinely vintage — not manufactured distressed. Ribbed cuffs and hem. No graphics, clean.', 'category': 'tops', 'style_tags': ['vintage', 'basics', 'oversized', 'classic'], 'size': 'XL (fits oversized)', 'condition': 'good', 'price': 20.0, 'colors': ['navy'], 'brand': None, 'platform': 'thredUp'}, {'id': 'lst_015', 'title': 'Vintage Graphic Hoodie — Faded Black', 'description': 'Faded black pullover hoodie with barely-visible vintage graphic on the chest. Cozy interior. Some pilling but adds to the worn-in look.', 'category': 'tops', 'style_tags': ['vintage', 'grunge', 'graphic', 'streetwear'], 'size': 'L', 'condition': 'fair', 'price': 26.0, 'colors': ['black', 'charcoal'], 'brand': None, 'platform': 'depop'}]
 ```
 
 ```
-$ python -c "from tools import suggest_outfit; ..."
+$ python -c "from tools import suggest_outfit; from utils.data_loader import get_example_wardrobe, load_listings; print(suggest_outfit(load_listings()[0], get_example_wardrobe()))"
+Here are two outfit suggestions that seamlessly integrate the vintage Levi's 501s into your existing wardrobe, using your exact item names:
 
+### Outfit 1: Effortless & Casual (Great for daytime or running errands)
+*   **Bottoms:** Vintage Levi's 501 Jeans — Medium Wash
+*   **Tops:** White ribbed tank top
+*   **Outerwear:** Vintage black denim jacket
+*   **Shoes:** Chunky white sneakers
+*   **Accessories:** Black crossbody bag
+
+**Why it works:** The straight-leg cut of the 501s balances nicely with the cropped fit of the black denim jacket for a classic denim-on-denim look. Tucking in the white ribbed tank top gives a clean, fitted silhouette against the structured denim, while the chunky white sneakers and black crossbody bag keep the vibe sporty, modern, and effortless.
+
+---
+
+### Outfit 2: Elevated Streetwear (Great for cooler weather or hanging out)
+*   **Bottoms:** Vintage Levi's 501 Jeans — Medium Wash
+*   **Tops:** Black cropped zip hoodie
+*   **Shoes:** Black combat boots
+*   **Accessories:** Brown leather belt, Black crossbody bag
+
+**Why it works:** Pairing the medium-wash 501s with the black combat boots creates a classic, grunge-leaning streetwear aesthetic. Adding the brown leather belt breaks up the denim and ties in nicely with the vintage feel of the jeans. Throwing on the black cropped zip hoodie highlights the high-waisted fit of the 501s and creates a sharp contrast against the chunkiness of the boots.
 ```
 
 ```
-$ python -c "from tools import create_fit_card; ..."
-
+$ python -c "from tools import create_fit_card; from utils.data_loader import load_listings; print(create_fit_card('jeans and white sneakers', load_listings()[0]))"
+Scored these vintage Levi's 501 jeans in a great medium wash for just $38.00 on Depop. They have that perfectly broken-in indigo look that's impossible to fake. I'm keeping the rest of the outfit super clean by just pairing them with crisp white sneakers for an effortless streetwear vibe.
 ```
 
 ---
