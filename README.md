@@ -41,6 +41,14 @@
 
 <!-- Three or four sentences: what a user asks for, and what they get back. -->
 
+FitFindr helps users find secondhand clothing from a plain-language query like
+"vintage graphic tee under $30, size M". The agent parses the query into a
+description, size and price ceiling, searches a dataset of thrift listings from
+Depop, thredUp and Poshmark through an MCP tool, and picks the best match. It
+then suggests one or two outfits that pair the item with pieces from the user's
+wardrobe (or general styling ideas if the wardrobe is empty) and writes a short
+social-media caption about the find. If nothing matches, the planning loop stops
+before the outfit step and tells the user what to change in their search.
 
 
 ---
@@ -191,15 +199,31 @@ Scored these vintage Levi's 501 jeans in a great medium wash for just $38.00 on 
 
 **Moment 1**
 
-- *What I asked for:*
-- *What came back:*
-- *What I changed:*
+- *What I asked for:* Help fixing an `IndentationError` in my `search_listings()`
+  draft — indentation only, without rewriting the function.
+- *What came back:* Claude fixed the indentation and pointed out that the
+  indentation had been hiding a logic bug: the `if word in text:` check sat
+  outside the `for word in keywords:` loop, so only the last keyword was ever
+  scored, and the check was duplicated, so each match added 2. It also flagged
+  that my size filter used a plain substring test, so `size='S'` returned the
+  `US 9` sneakers.
+- *What I changed:* I had the size filter switched to whole-token matching,
+  then in a separate step had the `if` moved back inside the loop, the duplicate
+  check removed and my debug `print()`s deleted. I kept my own scoring approach
+  and re-ran the test commands — `size='S'` now returns only `S/M` items and an
+  impossible search returns `[]`.
 
 **Moment 2**
 
-- *What I asked for:*
-- *What came back:*
-- *What I changed:*
+- *What I asked for:* Help improving `create_fit_card()` after the Before
+  evaluation showed criterion 4 at 1/5 — the captions sounded like I was
+  selling the item ("I just listed on Depop").
+- *What came back:* Claude traced it to the prompt: it gave the model a
+  listing-style block (price, platform, condition) and never said the poster
+  bought the item. It suggested telling the model the writer bought it.
+- *What I changed:* I limited the fix to the prompt — no other code changed —
+  reran `python run_eval.py --label after`, and confirmed criterion 4 went from
+  1/5 to 5/5 with the other four criteria still at 5/5.
 
 <!-- ═══════════════════════ UNIT 4 — THE TEST ═══════════════════════
 
@@ -330,22 +354,63 @@ open, and the model fills it in.
      the same length, your branch isn't working — and this is the fastest way
      anyone will ever find that out. -->
 
+Both traces are try 1 from `results/run_2026-10-11_1334_after.md`, printed by
+the `trace.step()` calls in `agent.py::run_agent`.
+
 **Happy path**
 
 ```
-
+[1] parse_query
+      in:  vintage graphic tee under $30
+      out: {'description': 'vintage graphic tee', 'size': None, 'max_price': 30.0}
+[2] search_listings (via MCP)
+      in:  {'description': 'vintage graphic tee', 'size': None, 'max_price': 30.0}
+      out: 10 items: Y2K Baby Tee — Butterfly Print, Graphic Tee — 2003 Tour Bootleg Style, Vintage Band Tee — Faded Grey … +7 more
+[3] select_item
+      in:  10 search results
+      out: Y2K Baby Tee — Butterfly Print ($18.0, depop)
+      →    took the first (best-scoring) result
+[4] suggest_outfit
+      in:  Y2K Baby Tee — Butterfly Print + 10 wardrobe items
+      out: Here are two outfit suggestions that pair the Y2K Butterfly Baby Tee with pieces already in your wardrobe:  **…
+[5] create_fit_card
+      in:  outfit (1165 chars) + Y2K Baby Tee — Butterfly Print
+      out: I am obsessed with this Y2K butterfly baby tee I just scored on Depop for only eighteen dollars. The pink and …
 ```
 
 **Empty search**
 
 ```
-
+[1] parse_query
+      in:  designer ballgown size XXS under $5
+      out: {'description': 'designer ballgown', 'size': 'XXS', 'max_price': 5.0}
+[2] search_listings (via MCP)
+      in:  {'description': 'designer ballgown', 'size': 'XXS', 'max_price': 5.0}
+      out: [] (empty)
+[3] stop
+      out: Nothing matched 'designer ballgown' in size XXS under $5.00. Try raising your max price, dropping the size, or…
+      →    branch: no listings matched, so suggest_outfit and create_fit_card are skipped
 ```
+
+The empty search is visibly shorter: it stops at step 3, and `suggest_outfit`
+and `create_fit_card` never run.
 
 **On the MCP move:** <!-- what changed in your code, and whether anything
 behaved differently afterwards. If the rewire didn't work, say exactly where it
 broke — the error text and the last thing that worked. That earns the point in
 full. -->
+
+In `mcp_server.py` I registered `search_listings` with
+`@mcp.tool(name="search_listings")`, typed inputs (`description: str`,
+`size: str | None`, `max_price: float | None`) and a description written for a
+caller who can't see my code, including the empty-list case. In
+`agent.py::run_agent` I replaced the direct `search_listings(...)` call with
+`call_tool("search_listings", {...})`, passing the same parsed values. Nothing
+behaved differently: `python mcp_client.py` listed the tool with all three
+inputs, and on three queries (7 results, 1 result and 0 results) the MCP call
+returned exactly the same list of dicts as the direct call, still a `list`. The
+agent's output and branch were unchanged, and the trace now shows the step as
+`search_listings (via MCP)`.
 
 
 
