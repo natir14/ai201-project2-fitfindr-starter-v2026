@@ -107,6 +107,7 @@ def run_agent(query: str, wardrobe: dict) -> dict:
         than a stack trace. The import is already at the top of this file.
     """
     session = new_session(query, wardrobe)
+    trace.start_trace()
 
     # Parse the query with string splitting:
     #   "size M"                      → size
@@ -144,50 +145,79 @@ def run_agent(query: str, wardrobe: dict) -> dict:
         "size": size,
         "max_price": max_price,
     }
+    trace.step("parse_query", inputs=query, returned=str(session["parsed"]))
 
     # Each pass picks the next step from what's already in the session.
     count = 0
-    while session["fit_card"] is None:
-        count += 1
-        trace.check_iterations(count)
+    try:
+        while session["fit_card"] is None:
+            count += 1
+            trace.check_iterations(count)
 
-        if session["selected_item"] is None:
-            parsed = session["parsed"]
-            results = call_tool(
-                "search_listings",
-                {
-                    "description": parsed["description"],
-                    "size": parsed["size"],
-                    "max_price": parsed["max_price"],
-                },
-            )
-            session["search_results"] = results
-
-            # The branch: nothing to style, so stop before suggest_outfit.
-            if not results:
-                tried = f"'{parsed['description']}'" if parsed["description"] else "your search"
-                if parsed["size"]:
-                    tried += f" in size {parsed['size']}"
-                if parsed["max_price"] is not None:
-                    tried += f" under ${parsed['max_price']:.2f}"
-                session["error"] = (
-                    f"Nothing matched {tried}. Try raising your max price, "
-                    "dropping the size, or using broader keywords "
-                    "(e.g. 'dress' instead of 'designer ballgown')."
+            if session["selected_item"] is None:
+                parsed = session["parsed"]
+                results = call_tool(
+                    "search_listings",
+                    {
+                        "description": parsed["description"],
+                        "size": parsed["size"],
+                        "max_price": parsed["max_price"],
+                    },
                 )
-                return session
+                session["search_results"] = results
+                trace.step("search_listings (via MCP)", inputs=str(parsed), returned=results)
 
-            session["selected_item"] = results[0]
+                # The branch: nothing to style, so stop before suggest_outfit.
+                if not results:
+                    tried = f"'{parsed['description']}'" if parsed["description"] else "your search"
+                    if parsed["size"]:
+                        tried += f" in size {parsed['size']}"
+                    if parsed["max_price"] is not None:
+                        tried += f" under ${parsed['max_price']:.2f}"
+                    session["error"] = (
+                        f"Nothing matched {tried}. Try raising your max price, "
+                        "dropping the size, or using broader keywords "
+                        "(e.g. 'dress' instead of 'designer ballgown')."
+                    )
+                    trace.step(
+                        "stop",
+                        returned=session["error"],
+                        note="branch: no listings matched, so suggest_outfit and create_fit_card are skipped",
+                    )
+                    return session
 
-        elif session["outfit_suggestion"] is None:
-            session["outfit_suggestion"] = suggest_outfit(
-                session["selected_item"], session["wardrobe"]
-            )
+                session["selected_item"] = results[0]
+                trace.step(
+                    "select_item",
+                    inputs=f"{len(results)} search results",
+                    returned=session["selected_item"],
+                    note="took the first (best-scoring) result",
+                )
 
-        else:
-            session["fit_card"] = create_fit_card(
-                session["outfit_suggestion"], session["selected_item"]
-            )
+            elif session["outfit_suggestion"] is None:
+                session["outfit_suggestion"] = suggest_outfit(
+                    session["selected_item"], session["wardrobe"]
+                )
+                wardrobe_items = session["wardrobe"].get("items") or []
+                trace.step(
+                    "suggest_outfit",
+                    inputs=f"{session['selected_item']['title']} + {len(wardrobe_items)} wardrobe items",
+                    returned=session["outfit_suggestion"],
+                )
+
+            else:
+                session["fit_card"] = create_fit_card(
+                    session["outfit_suggestion"], session["selected_item"]
+                )
+                trace.step(
+                    "create_fit_card",
+                    inputs=f"outfit ({len(session['outfit_suggestion'])} chars) + {session['selected_item']['title']}",
+                    returned=session["fit_card"],
+                )
+
+    except ModelUnavailable:
+        session["error"] = "The language model is unavailable. Please try again later."
+        return session
 
     return session
 
