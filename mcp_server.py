@@ -27,7 +27,7 @@ Uncomment the block below and fill it in. Three things matter:
      MCP server on the registry is.
 
      Two things to get right: name units and types ("price" is ambiguous,
-     "max_price, in whole dollars" isn't), and state the empty case. Last unit
+     "max_price, in whole dollars" isn't), and state the empty case. Last week
      the empty case was on your spec sheet for your loop's benefit. Here it's
      part of a published contract.
 
@@ -59,7 +59,7 @@ works with a direct call, and **a documented failure earns the point in full.**
 
 from mcp.server.fastmcp import FastMCP
 
-from tools import search_listings as _search_listings_impl  # noqa: F401 — you'll use this below
+from tools import search_listings  # noqa: F401 — you'll use this below
 
 # log_level="WARNING" keeps the server from printing an INFO line for every
 # request. Without it your terminal fills with "Processing request of type
@@ -67,32 +67,41 @@ from tools import search_listings as _search_listings_impl  # noqa: F401 — you
 mcp = FastMCP("fitfindr", log_level="WARNING")
 
 
-# ── TODO: uncomment and fill this in ──────────────────────────────────────────
-#
-# @mcp.tool()
-# def search_listings(
-#     description: str,
-#     size: str | None = None,
-#     max_price: float | None = None,
-# ) -> list[dict]:
-#     """
-#     <-- YOUR DESCRIPTION GOES HERE.
-#
-#         One or two sentences. What does this tool do, what does it need, and
-#         what does it give back when it finds nothing? Written for a reader
-#         who cannot see the code.
-#     """
-#     return _search_listings_impl(description, size, max_price)
-#
+# ── search_listings, registered over MCP ──────────────────────────────────────
+
+@mcp.tool(name="search_listings")
+def search_listings_tool(
+    description: str,
+    size: str | None = None,
+    max_price: float | None = None,
+) -> list[dict]:
+    """
+    Search secondhand clothing listings (depop, thredUp, poshmark) by keywords.
+
+    Inputs: `description` (string, required) — keywords such as "vintage graphic
+    tee"; a listing scores one point per keyword found in its title, description
+    or style tags. `size` (string, optional) — a clothing size such as "M" or
+    "W30", matched case-insensitively as a whole size token, so "M" matches
+    "S/M" but "S" does not match "US 9". `max_price` (number, optional) — the
+    highest price in US dollars, inclusive, e.g. 30 or 24.99.
+
+    Returns a list of up to 10 listing objects, best keyword match first, each
+    with id, title, description, category, style_tags, size, condition,
+    price (US dollars), colors, brand (often null) and platform. Returns an
+    empty list [] when nothing matches — never null and never an error.
+    """
+    return search_listings(description, size, max_price)
+
 # ──────────────────────────────────────────────────────────────────────────────
 #
 # Two notes on the block above.
 #
-# The registered name is the *function* name — so the block above registers
-# "search_listings", which is exactly what call_tool("search_listings", ...)
-# asks for. That is also why the import at the top of this file brings the real
-# implementation in under an alias: without it, the registered function and the
-# one it calls would be the same name, and the tool would call itself.
+# The registered name is the *function* name — so the version above would be
+# called as call_tool("search_listings_tool", ...). If you'd rather your agent
+# ask for "search_listings", name the function that and import the underlying
+# one with an alias:
+#
+#     from tools import search_listings as _search
 #
 # FastMCP builds the input schema from your type hints, which is why the hints
 # are not optional here. `description: str` becomes a required string;
