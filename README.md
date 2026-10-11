@@ -358,25 +358,57 @@ full. -->
 
      `python run_eval.py --label after` -->
 
-**What I changed:**
+**What I changed:** One change, to the prompt in `tools.py::create_fit_card`:
+it now says who the poster is. The opening line went from "Write a caption for
+a social media post about this thrift find" to "I just bought this item
+secondhand and I'm posting about my find. Write the caption for my post." The
+listing-style labels now point the same way — `Price:` became `Price I paid:`
+and `Platform:` became `Bought on:` (same values). And one rule was added: "I
+bought this; I'm not selling it. Never say it's listed or for sale, and never
+tell people to buy or grab it." The guard, the other rules, the `generate()`
+call and the fallback are unchanged, and no other file changed.
 
-**Which failure it was meant to fix:**
+**Which failure it was meant to fix:** Criterion 4, missed 1/5. The diagnosis
+put it in the model's output, caused by the prompt: it gave the model a block
+that reads like a resale listing (price, platform, condition) and never said the
+poster bought the item, so at temperature 0.9 the model often wrote as the
+seller — "I just listed on Depop", "Grab it before I change my mind and keep it
+for myself!".
 
 ### Run Log — After
 
+Produced by `python run_eval.py --label after` (caching off, temperature 0.9),
+written to `results/run_2026-10-11_1334_after.md`. Scored the same way as the
+Before run, including counting "grab it / before I change my mind" as seller
+framing for criterion 4.
+
 | Criterion | Target | Try 1 | Try 2 | Try 3 | Try 4 | Try 5 | Verdict |
 |---|---|---|---|---|---|---|---|
-| 1.  |  |  |  |  |  |  |  |
-| 2.  |  |  |  |  |  |  |  |
-| 3.  |  |  |  |  |  |  |  |
-| 4.  |  |  |  |  |  |  |  |
-| 5.  |  |  |  |  |  |  |  |
+| 1. A matching query completes all three tools | 4 of 5 | PASS | PASS | PASS | PASS | PASS | MET (5/5) |
+| 2. An impossible query stops before the second tool | 5 of 5 | PASS | PASS | PASS | PASS | PASS | MET (5/5) |
+| 3. The item search found is the item the fit card is about | 5 of 5 | PASS | PASS | PASS | PASS | PASS | MET (5/5) |
+| 4. The fit card reads like a post from the buyer | 4 of 5 | PASS | PASS | PASS | PASS | PASS | MET (5/5) |
+| 5. Search respects the size and price the user asked for | 5 of 5 | PASS | PASS | PASS | PASS | PASS | MET (5/5) |
 
-**Did it help, and how do I know:**
+**Did it help, and how do I know:** Yes. Criterion 4 went from MISSED (1/5) to
+MET (5/5). Every caption now uses buyer language — "I just scored on Depop",
+"Found this … on Depop for just $18" — and none says listed, selling, for sale,
+DM me, or grab it.
 
-<!-- If it made things worse, say that. Honestly reported, that earns full
-     credit and is more interesting than one that worked. -->
+Five tries is a small sample, and the Before run showed how much it can swing:
+identical input gave 4 seller-framed captions in criterion 4's five tries but
+only 1 in criterion 1's five. So I also counted across every fit card in each
+run, not just criterion 4's:
 
+| | Before | After |
+|---|---|---|
+| Seller-framed captions, all 25 fit cards | 5 / 25 | 0 / 25 |
+| Seller-framed, the 15 runs of `vintage graphic tee under $30` | 5 / 15 | 0 / 15 |
+| Captions outside 2–4 sentences | 0 / 25 | 0 / 25 |
+
+The change didn't break anything else: criteria 1, 2, 3 and 5 stayed at 5/5,
+every caption in the After run is still 2–4 sentences, and every criterion 3
+caption still states the selected item's $18 price.
 
 
 ---
@@ -387,7 +419,45 @@ full. -->
      you did. "I ran out of time" is fine if it's true. Pretending nothing is
      left is not. -->
 
+No criterion is still missed after the improvement — all five are MET in the
+After run. These are the problems I know about that my five criteria don't
+cover:
 
+- **Rate limits and MCP failures still crash the run.** `run_agent` only
+  catches `ModelUnavailable`. When the service keeps rate-limiting past
+  `MAX_RETRIES`, `generate()` raises a plain `RuntimeError`, and when the MCP
+  server can't be reached, `call_tool` raises `MCPError` — neither is caught in
+  `agent.py::run_agent`, so both end in a stack trace instead of a message in
+  `session["error"]`. Neither happened in the 60 eval runs (6 scenarios × 5 tries, Before and After), which is why no
+  criterion caught it. The fix is two more `except` branches that set
+  `session["error"]`, each tested by forcing the failure.
+
+- **The query parser only knows a few phrasings.** `run_agent` sets `max_price`
+  only from a `$` word or a number right after "under"/"below", and `size` only
+  from the word after "size". "graphic tee less than 30" parses to
+  `max_price: None` with "less than 30" left in the description, and "jeans in
+  medium, max 40 dollars" gets no size and no price. The price ceiling is
+  silently dropped — the user gets results, just not filtered the way they
+  asked. My scenarios all use the phrasings the parser handles, so the eval
+  never saw this. I'd add "less than", "max" and "dollars", and map "small /
+  medium / large" to S / M / L.
+
+- **Search ranks by keyword count and ignores category.** For "graphic tee",
+  `tools.py::search_listings` returns Low-Rise Cargo Pants because their
+  description ends "Great for layering with a long tee." The pants never came
+  first in any run, so `selected_item` was always a top, but they're in the
+  results list. Weighting title and style-tag matches above description
+  matches would push them down.
+
+- **Criterion 4 is fixed in this run, not proven fixed forever.** The prompt
+  now rules out seller framing, and 0 of 25 captions had it, but it's still an
+  instruction to a model at temperature 0.9, not a check in code. The
+  "mention the item, price and platform exactly once" rule isn't measured by
+  any criterion either.
+
+I stopped here because the unit asks for one improvement, measured properly,
+and adding more changes would have made the Before/After comparison for
+criterion 4 harder to trust.
 
 <!-- ═════════════════════════════════════════════════════════════════════
 

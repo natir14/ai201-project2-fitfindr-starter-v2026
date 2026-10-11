@@ -228,10 +228,11 @@ def create_fit_card(outfit: str, new_item: dict) -> str:
         )
 
     prompt = (
-        "Write a caption for a social media post about this thrift find.\n\n"
+        "I just bought this item secondhand and I'm posting about my find. "
+        "Write the caption for my post.\n\n"
         f"Item: {new_item['title']}\n"
-        f"Price: ${new_item['price']:.2f}\n"
-        f"Platform: {new_item['platform']}\n"
+        f"Price I paid: ${new_item['price']:.2f}\n"
+        f"Bought on: {new_item['platform']}\n"
         f"Condition: {new_item['condition']}\n"
         f"Colors: {', '.join(new_item['colors'])}\n"
         f"Style: {', '.join(new_item['style_tags'])}\n\n"
@@ -240,6 +241,8 @@ def create_fit_card(outfit: str, new_item: dict) -> str:
         "- Two to four sentences, plain text, no list of hashtags.\n"
         "- Mention the item, the price, and the platform exactly once each.\n"
         "- Sound like a real person posting their find, not a product description.\n"
+        "- I bought this; I'm not selling it. Never say it's listed or for sale, "
+        "and never tell people to buy or grab it.\n"
         "- Be specific about the vibe of the outfit."
     )
 
