@@ -219,19 +219,46 @@ Scored these vintage Levi's 501 jeans in a great medium wash for just $38.00 on 
      `python run_eval.py --label before` runs everything and writes the table
      into results/. Paste it here and fill in the verdicts. -->
 
+Produced by `python run_eval.py --label before` (caching off, temperature 0.9),
+written to `results/run_2026-10-11_1317_before.md`.
+
 | Criterion | Target | Try 1 | Try 2 | Try 3 | Try 4 | Try 5 | Verdict |
 |---|---|---|---|---|---|---|---|
-| 1.  |  |  |  |  |  |  |  |
-| 2.  |  |  |  |  |  |  |  |
-| 3.  |  |  |  |  |  |  |  |
-| 4.  |  |  |  |  |  |  |  |
-| 5.  |  |  |  |  |  |  |  |
+| 1. A matching query completes all three tools | 4 of 5 | PASS | PASS | PASS | PASS | PASS | MET (5/5) |
+| 2. An impossible query stops before the second tool | 5 of 5 | PASS | PASS | PASS | PASS | PASS | MET (5/5) |
+| 3. The item search found is the item the fit card is about | 5 of 5 | PASS | PASS | PASS | PASS | PASS | MET (5/5) |
+| 4. The fit card reads like a post from the buyer | 4 of 5 | PASS | FAIL | FAIL | FAIL | FAIL | MISSED (1/5) |
+| 5. Search respects the size and price the user asked for | 5 of 5 | PASS | PASS | PASS | PASS | PASS | MET (5/5) |
 
 **Real output from one try**, pasted as text, naming the file and function
-that produced it:
+that produced it. Criterion 4, try 2 — the fit card is from
+`tools.py::create_fit_card`, the trace from `agent.py::run_agent`:
 
 ```
+- stopped early: no
+- selected_item: Y2K Baby Tee — Butterfly Print ($18.0, depop)
+- search_results: 10
 
+Fit card:
+I am completely obsessed with this butterfly print Y2K baby tee I just listed on Depop for $18. It is giving major early 2000s nostalgia, and the pastel pink and purple colors look so cute paired with baggy dark-wash jeans and a zip hoodie. Grab it before I change my mind and keep it for myself!
+
+Trace:
+[1] parse_query
+      in:  vintage graphic tee under $30
+      out: {'description': 'vintage graphic tee', 'size': None, 'max_price': 30.0}
+[2] search_listings (via MCP)
+      in:  {'description': 'vintage graphic tee', 'size': None, 'max_price': 30.0}
+      out: 10 items: Y2K Baby Tee — Butterfly Print, Graphic Tee — 2003 Tour Bootleg Style, Vintage Band Tee — Faded Grey … +7 more
+[3] select_item
+      in:  10 search results
+      out: Y2K Baby Tee — Butterfly Print ($18.0, depop)
+      →    took the first (best-scoring) result
+[4] suggest_outfit
+      in:  Y2K Baby Tee — Butterfly Print + 10 wardrobe items
+      out: Here are two outfit suggestions that pair the Y2K Baby Tee with pieces already in your wardrobe:  **Outfit 1: …
+[5] create_fit_card
+      in:  outfit (1368 chars) + Y2K Baby Tee — Butterfly Print
+      out: I am completely obsessed with this butterfly print Y2K baby tee I just listed on Depop for $18. It is giving m…
 ```
 
 ---
@@ -256,13 +283,36 @@ that produced it:
 
 | # | Criterion | Target | Verdict | How I decided |
 |---|---|---|---|---|
-| 1 |  |  |  |  |
-| 2 |  |  |  |  |
-| 3 |  |  |  |  |
-| 4 |  |  |  |  |
-| 5 |  |  |  |  |
+| 1 | A matching query completes all three tools | 4 of 5 | **PASS** — MET (5/5) | All five tries of `vintage graphic tee under $30` ended with `error` None and a non-empty `fit_card`; the trace shows all five steps each time. No rate-limit failure happened, so the one-miss allowance wasn't needed. |
+| 2 | An impossible query stops before the second tool | 5 of 5 | **PASS** — MET (5/5) | All five tries of `designer ballgown size XXS under $5` show `search_listings (via MCP)` returning `[] (empty)`, then the `stop` step; `outfit_suggestion` and `fit_card` stayed None, and the error named the description, size and price and said to raise the price, drop the size or broaden the keywords. |
+| 3 | The item search found is the item the fit card is about | 5 of 5 | **PASS** — MET (5/5) | In all five tries the first title in the search step equals `selected_item` (Y2K Baby Tee — Butterfly Print), and every fit card states its price as `$18` or `$18.00`. |
+| 4 | The fit card reads like a post from the buyer | 4 of 5 | **FAIL** — MISSED (1/5) | All five cards were 3 sentences, so length passed every time. Tries 2, 3 and 5 say "I just listed on Depop"; try 4 has none of the listed words but ends "Grab it for your wardrobe before I change my mind and keep it for myself!", which describes the item as being sold, so I scored it FAIL on the criterion's main clause. Only try 1 reads as a buyer. (Counting keywords alone gives 2/5 — still missed.) |
+| 5 | Search respects the size and price the user asked for | 5 of 5 | **PASS** — MET (5/5) | All five tries of `top size S under $20` returned exactly one listing, Mesh Long-Sleeve Top — Black, size `S/M`, $15.00 — under the ceiling and with `S` as a whole size token. No `US 9` or `XS` items appeared. |
 
 **Diagnoses**
+
+**Criterion 4 — missed 1/5. Place: the model's output, driven by the prompt in
+`tools.py::create_fit_card`.** The tool ran and returned a caption every time;
+what went wrong is the voice. The prompt opens "Write a caption for a social
+media post about this thrift find", then hands the model a block that looks like
+a listing — `Price: $18.00`, `Platform: depop`, `Condition: excellent` — and
+only says "sound like a real person posting their find". It never says the
+poster *bought* the item. On a resale platform like Depop, a person posting an
+item with its price is most often the seller, so at temperature 0.9 the model
+regularly picks that reading: "I just listed on Depop", "Grab it before I change
+my mind and keep it for myself!".
+
+The pattern across the whole run supports this. The same query
+(`vintage graphic tee under $30`, same item) was run 15 times across criteria
+1, 3 and 4, and 5 of those 15 captions were seller-framed — 4 landed in
+criterion 4's five tries, 1 in criterion 1's, 0 in criterion 3's. That spread is
+sampling variance on identical input, not a difference between the scenarios,
+so the honest rate for this item is about 1 in 3 — still well above the one
+miss in five the target allows. The other two items in the run (the denim
+jacket and the mesh top) produced 0 seller-framed captions in 10, so the
+ambiguity bites hardest on this item, but nothing in the prompt rules it out
+for any item. It's one problem, not four: the prompt leaves the poster's role
+open, and the model fills it in.
 
 
 
